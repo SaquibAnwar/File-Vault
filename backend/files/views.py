@@ -227,7 +227,7 @@ class FileReferenceViewSet(viewsets.ModelViewSet):
         """
         try:
             file_types = File.objects.values_list('file_type', flat=True).distinct().order_by('file_type')
-            return Response({'file_types': list(file_types)})
+            return Response(list(file_types))
         except Exception as e:
             return Response(
                 {'error': f'Failed to retrieve file types: {str(e)}'}, 
