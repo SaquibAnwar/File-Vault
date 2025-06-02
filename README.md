@@ -34,8 +34,14 @@ Before you begin, ensure you have installed:
 ### Using Docker (Recommended)
 
 ```bash
+# Build and start all services
 docker-compose up --build
+
+# For development with logs
+docker-compose up --build --remove-orphans
 ```
+
+**Note**: Docker setup includes persistent volumes for database, media files, and static files.
 
 ### Local Development Setup
 
@@ -57,9 +63,14 @@ docker-compose up --build
    mkdir -p media staticfiles data
    ```
 
-4. **Run migrations**
+4. **Run database migrations**
    ```bash
+   # Initial migration for deduplication features
    python manage.py migrate
+   
+   # If you encounter migration issues, reset database:
+   # rm data/db.sqlite3
+   # python manage.py migrate
    ```
 
 5. **Start the development server**
@@ -85,38 +96,167 @@ docker-compose up --build
    npm start
    ```
 
+### Additional Setup Notes
+- **Database**: Uses SQLite with enhanced schema for deduplication and search
+- **File Storage**: Organized storage structure with automatic cleanup
+- **TypeScript**: Frontend uses comprehensive type system for API responses
+- **React Query**: Enabled with DevTools for debugging data fetching
+
 ## 🌐 Accessing the Application
 
-- Frontend Application: http://localhost:3000
-- Backend API: http://localhost:8000/api
+- **Frontend Application**: http://localhost:3000
+- **Backend API**: http://localhost:8000/api
+- **API Documentation**: All 15+ endpoints documented below
+- **React Query DevTools**: Available in development mode
 
-## 📝 API Documentation
+## 📝 **Complete API Documentation**
 
-### File Management Endpoints
+### 📁 **File Reference Management**
 
-#### List Files
+#### List Files with Advanced Search & Filtering
 - **GET** `/api/files/`
-- Returns a list of all uploaded files
-- Response includes file metadata (name, size, type, upload date)
+- **Query Parameters:**
+  - `search` - Search by filename (partial matching)
+  - `file_type` - Filter by file type (can specify multiple)
+  - `min_size`, `max_size` - Size range filtering (in bytes)
+  - `from_date`, `to_date` - Date range filtering (YYYY-MM-DD format)
+  - `duplicates_only` - Show only duplicate files (true/false)
+  - `sort_by` - Sort results (e.g., `-uploaded_at`, `size`, `original_filename`)
+  - `page`, `page_size` - Pagination controls (default: page_size=20)
 
-#### Upload File
+**Example:**
+```bash
+GET /api/files/?search=document&file_type=text/plain&min_size=1000&sort_by=-uploaded_at&page=1&page_size=10
+```
+
+**Response:**
+```json
+{
+  "count": 42,
+  "next": "http://localhost:8000/api/files/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": "uuid",
+      "original_filename": "document.txt",
+      "file_type": "text/plain",
+      "size": 1024,
+      "uploaded_at": "2024-01-01T12:00:00Z",
+      "is_duplicate": false,
+      "reference_count": 1,
+      "file_url": "http://localhost:8000/media/files/...",
+      "file_hash": "sha256hash..."
+    }
+  ]
+}
+```
+
+#### Upload File with Smart Deduplication
 - **POST** `/api/files/`
-- Upload a new file
-- Request: Multipart form data with 'file' field
-- Returns: File metadata including ID and upload status
+- **Content-Type:** `multipart/form-data`
+- **Body:** `file` (binary file data)
+
+**Response with Deduplication Info:**
+```json
+{
+  "file_reference": {
+    "id": "uuid",
+    "original_filename": "example.txt",
+    "file_type": "text/plain",
+    "size": 1024,
+    "uploaded_at": "2024-01-01T12:00:00Z",
+    "is_duplicate": true,
+    "reference_count": 2,
+    "file_url": "http://localhost:8000/media/files/...",
+    "file_hash": "sha256hash..."
+  },
+  "is_duplicate": true,
+  "storage_saved": 1024,
+  "message": "Duplicate file detected. Storage saved: 1024 bytes"
+}
+```
 
 #### Get File Details
-- **GET** `/api/files/<file_id>/`
-- Retrieve details of a specific file
-- Returns: Complete file metadata
+- **GET** `/api/files/{id}/`
+- Returns complete file reference metadata with deduplication info
 
-#### Delete File
-- **DELETE** `/api/files/<file_id>/`
-- Remove a file from the system
-- Returns: 204 No Content on success
+#### Delete File Reference
+- **DELETE** `/api/files/{id}/`
+- Handles reference counting and physical file cleanup
 
-#### Download File
-- Access file directly through the file URL provided in metadata
+**Response:**
+```json
+{
+  "message": "File reference deleted successfully",
+  "file_deleted": true,
+  "storage_freed": 1024,
+  "references_remaining": 0
+}
+```
+
+### 🔍 **Advanced Search & Analytics**
+
+#### Advanced Search Endpoint
+- **GET** `/api/files/search/`
+- Same parameters as list endpoint but optimized for complex searches
+
+#### Get Available File Types
+- **GET** `/api/files/file_types/`
+- Returns array of all file types in the system
+
+#### Get Duplicate Files Only
+- **GET** `/api/files/duplicates/`
+- Returns paginated list of all duplicate files
+
+### 📊 **Storage Statistics & Analytics**
+
+#### Real-time Storage Statistics
+- **GET** `/api/files/stats/`
+- **Response:**
+```json
+{
+  "total_files_uploaded": 42,
+  "unique_files_stored": 29,
+  "total_size_uploaded": 50348576,
+  "actual_size_stored": 9458392,
+  "storage_saved": 40890184,
+  "savings_percentage": 81.22,
+  "deduplication_ratio": 1.45,
+  "last_updated": "2024-01-01T12:00:00Z"
+}
+```
+
+#### Detailed Analytics
+- **GET** `/api/files/detailed_stats/`
+- Comprehensive analytics including file type breakdown and activity
+
+### 🗂️ **Bulk Operations**
+
+#### Bulk Delete File References
+- **POST** `/api/files/bulk_delete/`
+- **Body:** `{"reference_ids": ["uuid1", "uuid2", "uuid3"]}`
+
+### 🗄️ **Physical File Management**
+
+#### Get Physical File References
+- **GET** `/api/physical-files/{id}/references/`
+
+#### Most Referenced Files
+- **GET** `/api/physical-files/most_referenced/`
+
+#### Get Duplicate References for File
+- **GET** `/api/files/{id}/duplicate_references/`
+
+### 🚨 **System Maintenance**
+
+#### Check for Orphaned Files
+- **GET** `/api/files/orphaned_files/`
+
+**Performance Notes:**
+- All endpoints support pagination (default 20 items per page)
+- Search operations use database indexes for sub-25ms performance
+- File deduplication uses SHA-256 hashing for accuracy
+- Reference counting prevents orphaned files
 
 ## 🗄️ Project Structure
 
