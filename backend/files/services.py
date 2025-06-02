@@ -1,8 +1,9 @@
-import hashlib
 import os
+import hashlib
 from django.core.files.base import ContentFile
 from django.db import transaction
 from .models import File, FileReference, StorageStats
+from django.db.models import Count, Sum, Avg, Max, Q
 
 class DeduplicationService:
     """
@@ -208,78 +209,148 @@ class DeduplicationService:
 
 class FileSearchService:
     """
-    Service class for file search and filtering functionality
+    Service class for file search and filtering functionality with optimized performance
     """
     
     @staticmethod
     def search_files(query_params):
         """
-        Search and filter files based on query parameters
+        Optimized search and filter files based on query parameters using custom manager
         
         Args:
             query_params (dict): Search and filter parameters
             
         Returns:
-            QuerySet: Filtered FileReference queryset
+            QuerySet: Filtered FileReference queryset with optimized queries
         """
-        queryset = FileReference.objects.select_related('file').all()
+        # Use the optimized advanced_search method from our custom manager
+        return FileReference.objects.advanced_search(query_params)
+    
+    @staticmethod
+    def search_by_filename_only(query):
+        """
+        Optimized filename-only search
         
-        # Search by filename
-        search = query_params.get('search', '').strip()
-        if search:
-            queryset = queryset.filter(original_filename__icontains=search)
+        Args:
+            query (str): Search query for filename
+            
+        Returns:
+            QuerySet: Filtered results optimized for filename search
+        """
+        return FileReference.objects.search_by_filename(query)
+    
+    @staticmethod
+    def get_file_type_statistics():
+        """
+        Get comprehensive file type statistics with optimized queries
         
-        # Filter by file type
-        file_types = query_params.getlist('file_type')
-        if file_types:
-            queryset = queryset.filter(file__file_type__in=file_types)
+        Returns:
+            dict: File type statistics and performance metrics
+        """
+        # Use optimized manager method
+        type_stats = File.objects.by_file_type()
         
-        # Filter by size range
-        min_size = query_params.get('min_size')
-        max_size = query_params.get('max_size')
-        if min_size:
-            try:
-                queryset = queryset.filter(file__size__gte=int(min_size))
-            except ValueError:
-                pass
-        if max_size:
-            try:
-                queryset = queryset.filter(file__size__lte=int(max_size))
-            except ValueError:
-                pass
+        # Additional statistics
+        total_stats = File.objects.storage_efficient_query()
         
-        # Filter by date range
-        from_date = query_params.get('from_date')
-        to_date = query_params.get('to_date')
-        if from_date:
-            try:
-                from datetime import datetime
-                from_date = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
-                queryset = queryset.filter(uploaded_at__gte=from_date)
-            except ValueError:
-                pass
-        if to_date:
-            try:
-                from datetime import datetime
-                to_date = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
-                queryset = queryset.filter(uploaded_at__lte=to_date)
-            except ValueError:
-                pass
+        # Most duplicated file types
+        duplicated_types = File.objects.filter(reference_count__gt=1).values('file_type').annotate(
+            avg_duplicates=Avg('reference_count'),
+            max_duplicates=Max('reference_count'),
+            duplicated_files=Count('id')
+        ).order_by('-avg_duplicates')
         
-        # Filter duplicates only
-        duplicates_only = query_params.get('duplicates_only', '').lower() == 'true'
-        if duplicates_only:
-            queryset = queryset.filter(is_duplicate=True)
+        return {
+            'type_breakdown': list(type_stats),
+            'total_statistics': total_stats,
+            'most_duplicated_types': list(duplicated_types),
+        }
+    
+    @staticmethod
+    def get_search_suggestions(partial_query, limit=10):
+        """
+        Get search suggestions based on partial filename query
         
-        # Sort options
-        sort_by = query_params.get('sort_by', '-uploaded_at')
-        valid_sort_fields = [
-            'uploaded_at', '-uploaded_at',
-            'original_filename', '-original_filename', 
-            'file__size', '-file__size',
-            'file__file_type', '-file__file_type'
+        Args:
+            partial_query (str): Partial search query
+            limit (int): Maximum number of suggestions
+            
+        Returns:
+            list: List of suggested filenames
+        """
+        if not partial_query or len(partial_query) < 2:
+            return []
+        
+        # Use normalized search for better performance
+        suggestions = FileReference.objects.filter(
+            filename_normalized__startswith=partial_query.lower()
+        ).values_list('original_filename', flat=True).distinct()[:limit]
+        
+        return list(suggestions)
+    
+    @staticmethod
+    def get_popular_file_types(limit=10):
+        """
+        Get most popular file types by upload count
+        
+        Args:
+            limit (int): Maximum number of file types to return
+            
+        Returns:
+            list: Popular file types with statistics
+        """
+        return File.objects.by_file_type()[:limit]
+    
+    @staticmethod
+    def search_performance_analytics():
+        """
+        Get analytics about search performance and usage patterns
+        
+        Returns:
+            dict: Performance analytics and insights
+        """
+        # File type distribution
+        type_distribution = File.objects.values('file_type').annotate(
+            count=Count('id')
+        ).order_by('-count')
+        
+        # Size distribution (categorized)
+        size_categories = [
+            ('Small (< 1MB)', 0, 1024*1024),
+            ('Medium (1-10MB)', 1024*1024, 10*1024*1024),
+            ('Large (> 10MB)', 10*1024*1024, float('inf'))
         ]
-        if sort_by in valid_sort_fields:
-            queryset = queryset.order_by(sort_by)
         
-        return queryset 
+        size_stats = []
+        for label, min_size, max_size in size_categories:
+            if max_size == float('inf'):
+                count = File.objects.filter(size__gte=min_size).count()
+            else:
+                count = File.objects.filter(size__gte=min_size, size__lt=max_size).count()
+            size_stats.append({'category': label, 'count': count})
+        
+        # Duplicate patterns
+        duplicate_stats = {
+            'total_references': FileReference.objects.count(),
+            'unique_files': File.objects.count(),
+            'duplicate_references': FileReference.objects.filter(is_duplicate=True).count(),
+            'files_with_duplicates': File.objects.filter(reference_count__gt=1).count(),
+        }
+        
+        # Recent activity
+        from datetime import datetime, timedelta
+        recent_date = datetime.now() - timedelta(days=7)
+        recent_activity = {
+            'uploads_last_7_days': FileReference.objects.filter(uploaded_at__gte=recent_date).count(),
+            'duplicates_last_7_days': FileReference.objects.filter(
+                uploaded_at__gte=recent_date, 
+                is_duplicate=True
+            ).count(),
+        }
+        
+        return {
+            'file_type_distribution': list(type_distribution),
+            'size_distribution': size_stats,
+            'duplicate_analytics': duplicate_stats,
+            'recent_activity': recent_activity,
+        } 
