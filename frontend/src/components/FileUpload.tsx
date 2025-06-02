@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { fileService } from '../services/fileService';
-import { CloudArrowUpIcon } from '@heroicons/react/24/outline';
+import { 
+  CloudArrowUpIcon, 
+  CheckCircleIcon, 
+  ExclamationTriangleIcon,
+  DocumentDuplicateIcon 
+} from '@heroicons/react/24/outline';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { FileUploadResponse } from '../types/file';
 
 interface FileUploadProps {
   onUploadSuccess: () => void;
@@ -10,15 +16,22 @@ interface FileUploadProps {
 export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<FileUploadResponse | null>(null);
   const queryClient = useQueryClient();
 
   const uploadMutation = useMutation({
     mutationFn: fileService.uploadFile,
-    onSuccess: () => {
-      // Invalidate and refetch files query
+    onSuccess: (data: FileUploadResponse) => {
+      // Invalidate and refetch queries
       queryClient.invalidateQueries({ queryKey: ['files'] });
+      queryClient.invalidateQueries({ queryKey: ['storage-stats'] });
+      
       setSelectedFile(null);
+      setUploadResult(data);
       onUploadSuccess();
+      
+      // Auto-clear success message after 5 seconds
+      setTimeout(() => setUploadResult(null), 5000);
     },
     onError: (error) => {
       setError('Failed to upload file. Please try again.');
@@ -30,6 +43,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
     if (event.target.files && event.target.files[0]) {
       setSelectedFile(event.target.files[0]);
       setError(null);
+      setUploadResult(null);
     }
   };
 
@@ -41,6 +55,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
 
     try {
       setError(null);
+      setUploadResult(null);
       await uploadMutation.mutateAsync(selectedFile);
     } catch (err) {
       // Error handling is done in onError callback
@@ -53,6 +68,48 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
         <CloudArrowUpIcon className="h-6 w-6 text-primary-600 mr-2" />
         <h2 className="text-xl font-semibold text-gray-900">Upload File</h2>
       </div>
+
+      {/* Upload Success/Duplicate Notification */}
+      {uploadResult && (
+        <div className={`mb-4 p-4 rounded-lg border ${
+          uploadResult.is_duplicate 
+            ? 'bg-amber-50 border-amber-200' 
+            : 'bg-green-50 border-green-200'
+        }`}>
+          <div className="flex items-start">
+            {uploadResult.is_duplicate ? (
+              <DocumentDuplicateIcon className="h-5 w-5 text-amber-600 mt-0.5 mr-3 flex-shrink-0" />
+            ) : (
+              <CheckCircleIcon className="h-5 w-5 text-green-600 mt-0.5 mr-3 flex-shrink-0" />
+            )}
+            <div className="flex-1">
+              <h3 className={`text-sm font-medium ${
+                uploadResult.is_duplicate ? 'text-amber-800' : 'text-green-800'
+              }`}>
+                {uploadResult.is_duplicate ? 'Duplicate File Detected' : 'Upload Successful'}
+              </h3>
+              <p className={`mt-1 text-sm ${
+                uploadResult.is_duplicate ? 'text-amber-700' : 'text-green-700'
+              }`}>
+                {uploadResult.message}
+              </p>
+              {uploadResult.is_duplicate && uploadResult.storage_saved > 0 && (
+                <p className="mt-1 text-xs text-amber-600">
+                  Storage saved: {fileService.formatFileSize(uploadResult.storage_saved)}
+                </p>
+              )}
+              <div className="mt-2 text-xs text-gray-600">
+                <span>File: {uploadResult.file_reference.original_filename}</span>
+                <span className="mx-2">•</span>
+                <span>Size: {fileService.formatFileSize(uploadResult.file_reference.size)}</span>
+                <span className="mx-2">•</span>
+                <span>References: {uploadResult.file_reference.reference_count}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mt-4 space-y-4">
         <div className="flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg">
           <div className="space-y-1 text-center">
@@ -76,20 +133,31 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
             <p className="text-xs text-gray-500">Any file up to 10MB</p>
           </div>
         </div>
+
         {selectedFile && (
-          <div className="text-sm text-gray-600">
-            Selected: {selectedFile.name}
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="text-sm text-gray-700">
+              <span className="font-medium">Selected:</span> {selectedFile.name}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              Size: {fileService.formatFileSize(selectedFile.size)}
+              <span className="mx-2">•</span>
+              Type: {selectedFile.type || 'Unknown'}
+            </div>
           </div>
         )}
+
         {error && (
-          <div className="text-sm text-red-600 bg-red-50 p-2 rounded">
+          <div className="flex items-center p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg">
+            <ExclamationTriangleIcon className="h-5 w-5 mr-2 flex-shrink-0" />
             {error}
           </div>
         )}
+
         <button
           onClick={handleUpload}
           disabled={!selectedFile || uploadMutation.isPending}
-          className={`w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${
+          className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white transition-colors ${
             !selectedFile || uploadMutation.isPending
               ? 'bg-gray-300 cursor-not-allowed'
               : 'bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500'
@@ -120,7 +188,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
               Uploading...
             </>
           ) : (
-            'Upload'
+            'Upload File'
           )}
         </button>
       </div>
