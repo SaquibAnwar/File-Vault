@@ -4,11 +4,14 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from django.http import Http404
+from django.db.models import Sum, Count, Q
 
 from .models import File, FileReference, StorageStats
 from .serializers import (
     FileSerializer, FileReferenceSerializer, FileUploadSerializer,
-    FileUploadResponseSerializer, StorageStatsSerializer, FileSearchSerializer
+    FileUploadResponseSerializer, StorageStatsSerializer, FileSearchSerializer,
+    BulkDeleteSerializer, BulkDeleteResponseSerializer, DetailedStatsSerializer,
+    FileTypeStatsSerializer
 )
 from .services import DeduplicationService, FileSearchService
 
@@ -101,6 +104,48 @@ class FileReferenceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        """
+        Bulk delete multiple file references
+        """
+        try:
+            # Validate the request data
+            bulk_delete_serializer = BulkDeleteSerializer(data=request.data)
+            bulk_delete_serializer.is_valid(raise_exception=True)
+            
+            reference_ids = bulk_delete_serializer.validated_data['reference_ids']
+            references = FileReference.objects.filter(id__in=reference_ids)
+            
+            deletion_results = []
+            total_storage_freed = 0
+            
+            for reference in references:
+                deletion_info = DeduplicationService.handle_file_deletion(reference)
+                deletion_results.append({
+                    'reference_id': str(reference.id),
+                    'original_filename': reference.original_filename,
+                    'file_deleted': deletion_info['file_deleted'],
+                    'storage_freed': deletion_info['storage_freed']
+                })
+                total_storage_freed += deletion_info['storage_freed']
+            
+            response_data = {
+                'message': f'Successfully deleted {len(deletion_results)} file references',
+                'total_storage_freed': total_storage_freed,
+                'results': deletion_results
+            }
+            
+            # Serialize the response
+            response_serializer = BulkDeleteResponseSerializer(response_data)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'error': f'Bulk deletion failed: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=False, methods=['get'])
     def search(self, request):
         """
@@ -134,6 +179,44 @@ class FileReferenceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response(
                 {'error': f'Failed to retrieve stats: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def detailed_stats(self, request):
+        """
+        Get detailed storage statistics with breakdown by file type
+        """
+        try:
+            # Basic stats
+            stats = StorageStats.get_stats()
+            
+            # File type breakdown
+            file_type_stats = File.objects.values('file_type').annotate(
+                count=Count('id'),
+                total_size=Sum('size'),
+                total_references=Sum('reference_count')
+            ).order_by('-total_size')
+            
+            # Most duplicated files
+            most_duplicated = File.objects.filter(reference_count__gt=1).order_by('-reference_count')[:10]
+            
+            # Recent activity
+            recent_uploads = FileReference.objects.order_by('-uploaded_at')[:10]
+            recent_duplicates = FileReference.objects.filter(is_duplicate=True).order_by('-uploaded_at')[:5]
+            
+            response_data = {
+                'basic_stats': StorageStatsSerializer(stats, context={'request': request}).data,
+                'file_type_breakdown': list(file_type_stats),
+                'most_duplicated_files': FileSerializer(most_duplicated, many=True, context={'request': request}).data,
+                'recent_uploads': FileReferenceSerializer(recent_uploads, many=True, context={'request': request}).data,
+                'recent_duplicates': FileReferenceSerializer(recent_duplicates, many=True, context={'request': request}).data
+            }
+            
+            return Response(response_data)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retrieve detailed stats: {str(e)}'}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -173,6 +256,46 @@ class FileReferenceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=False, methods=['get'])
+    def orphaned_files(self, request):
+        """
+        Get physical files that have no references (should not happen with proper reference counting)
+        """
+        try:
+            orphaned = File.objects.filter(reference_count=0)
+            serializer = FileSerializer(orphaned, many=True, context={'request': request})
+            return Response({
+                'count': orphaned.count(),
+                'orphaned_files': serializer.data
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retrieve orphaned files: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'])
+    def duplicate_references(self, request, pk=None):
+        """
+        Get all references that point to the same physical file as this reference
+        """
+        try:
+            file_reference = self.get_object()
+            duplicate_references = FileReference.objects.filter(
+                file=file_reference.file
+            ).exclude(id=file_reference.id)
+            
+            serializer = self.get_serializer(duplicate_references, many=True)
+            return Response({
+                'total_references': file_reference.file.reference_count,
+                'other_references': serializer.data
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retrieve duplicate references: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 class FileViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for viewing physical file information (read-only)
@@ -184,7 +307,7 @@ class FileViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['get'])
     def references(self, request, pk=None):
         """
-        Get all references to a specific file
+        Get all references to a specific physical file
         """
         try:
             file_obj = self.get_object()
@@ -204,6 +327,24 @@ class FileViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-# Maintain backward compatibility with the original API
-# Map 'files' endpoint to FileReference operations
-FileViewSet = FileReferenceViewSet
+    @action(detail=False, methods=['get'])
+    def most_referenced(self, request):
+        """
+        Get files with the most references (most duplicated)
+        """
+        try:
+            most_referenced = File.objects.filter(reference_count__gt=1).order_by('-reference_count')
+            
+            # Apply pagination
+            page = self.paginate_queryset(most_referenced)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+            
+            serializer = self.get_serializer(most_referenced, many=True)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to retrieve most referenced files: {str(e)}'}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

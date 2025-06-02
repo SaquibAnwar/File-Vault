@@ -156,3 +156,76 @@ class FileSearchSerializer(serializers.Serializer):
             raise serializers.ValidationError("from_date cannot be later than to_date")
         
         return data 
+
+class BulkDeleteSerializer(serializers.Serializer):
+    """Serializer for bulk delete operations"""
+    
+    reference_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        min_length=1,
+        max_length=100,  # Limit bulk operations to 100 items
+        help_text="List of file reference IDs to delete"
+    )
+    
+    def validate_reference_ids(self, value):
+        """Validate that reference IDs exist"""
+        existing_ids = set(
+            FileReference.objects.filter(id__in=value).values_list('id', flat=True)
+        )
+        invalid_ids = set(value) - existing_ids
+        
+        if invalid_ids:
+            raise serializers.ValidationError(
+                f"Invalid reference IDs: {[str(id) for id in invalid_ids]}"
+            )
+        
+        return value
+
+class BulkDeleteResponseSerializer(serializers.Serializer):
+    """Serializer for bulk delete response"""
+    
+    message = serializers.CharField()
+    total_storage_freed = serializers.IntegerField()
+    results = serializers.ListField(
+        child=serializers.DictField()
+    )
+
+class DetailedStatsSerializer(serializers.Serializer):
+    """Serializer for detailed statistics response"""
+    
+    basic_stats = StorageStatsSerializer()
+    file_type_breakdown = serializers.ListField(
+        child=serializers.DictField()
+    )
+    most_duplicated_files = FileSerializer(many=True)
+    recent_uploads = FileReferenceSerializer(many=True)
+    recent_duplicates = FileReferenceSerializer(many=True)
+
+class FileTypeStatsSerializer(serializers.Serializer):
+    """Serializer for file type statistics"""
+    
+    file_type = serializers.CharField()
+    count = serializers.IntegerField()
+    total_size = serializers.IntegerField()
+    total_references = serializers.IntegerField()
+    
+    # Formatted fields
+    total_size_mb = serializers.SerializerMethodField()
+    average_file_size = serializers.SerializerMethodField()
+    deduplication_ratio = serializers.SerializerMethodField()
+    
+    def get_total_size_mb(self, obj):
+        """Convert bytes to MB"""
+        return round(obj['total_size'] / (1024 * 1024), 2)
+    
+    def get_average_file_size(self, obj):
+        """Calculate average file size"""
+        if obj['count'] > 0:
+            return round(obj['total_size'] / obj['count'])
+        return 0
+    
+    def get_deduplication_ratio(self, obj):
+        """Calculate deduplication ratio for this file type"""
+        if obj['count'] > 0:
+            return round(obj['total_references'] / obj['count'], 2)
+        return 0 
