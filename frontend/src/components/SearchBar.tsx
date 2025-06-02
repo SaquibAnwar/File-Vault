@@ -1,6 +1,18 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
+// Debounce utility function
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  waitFor: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout;
+  return (...args: Parameters<T>) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), waitFor);
+  };
+}
+
 interface SearchBarProps {
   onSearch: (query: string) => void;
   placeholder?: string;
@@ -89,16 +101,4 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       )}
     </div>
   );
-};
-
-// Debounce utility function
-function debounce<T extends (...args: any[]) => any>(
-  func: T,
-  waitFor: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => func(...args), waitFor);
-  };
-} 
+}; 

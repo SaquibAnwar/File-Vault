@@ -50,14 +50,27 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   };
 
   const clearAllFilters = () => {
-    const clearedFilters: SearchParams = {};
+    const clearedFilters: SearchParams = {
+      // Preserve pagination and sorting
+      page: localFilters.page || 1,
+      page_size: localFilters.page_size,
+      sort_by: localFilters.sort_by,
+      // Clear all filter-specific properties
+      search: undefined,
+      file_type: undefined,
+      min_size: undefined,
+      max_size: undefined,
+      from_date: undefined,
+      to_date: undefined,
+      duplicates_only: undefined
+    };
     setLocalFilters(clearedFilters);
     onFiltersChange(clearedFilters);
   };
 
   const removeFilter = (key: keyof SearchParams) => {
     const newFilters = { ...localFilters };
-    delete newFilters[key];
+    (newFilters as any)[key] = undefined;
     setLocalFilters(newFilters);
     onFiltersChange(newFilters);
   };
@@ -141,8 +154,11 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                 Size: {localFilters.min_size ? formatFileSize(localFilters.min_size) : '0'} - {localFilters.max_size ? formatFileSize(localFilters.max_size) : '∞'}
                 <button
                   onClick={() => {
-                    removeFilter('min_size');
-                    removeFilter('max_size');
+                    const newFilters = { ...localFilters };
+                    newFilters.min_size = undefined;
+                    newFilters.max_size = undefined;
+                    setLocalFilters(newFilters);
+                    onFiltersChange(newFilters);
                   }}
                   className="ml-1 hover:text-green-600"
                 >
@@ -156,8 +172,11 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
                 Date Range
                 <button
                   onClick={() => {
-                    removeFilter('from_date');
-                    removeFilter('to_date');
+                    const newFilters = { ...localFilters };
+                    newFilters.from_date = undefined;
+                    newFilters.to_date = undefined;
+                    setLocalFilters(newFilters);
+                    onFiltersChange(newFilters);
                   }}
                   className="ml-1 hover:text-purple-600"
                 >
