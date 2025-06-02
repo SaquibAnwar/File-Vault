@@ -28,9 +28,10 @@ export const FileList: React.FC = () => {
   });
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [isSelectMode, setIsSelectMode] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Query for fetching files with pagination and filtering
-  const { data: fileResponse, isLoading, error } = useQuery<PaginatedResponse<FileReference>>({
+  const { data: fileResponse, isLoading, error: queryError } = useQuery<PaginatedResponse<FileReference>>({
     queryKey: ['files', searchParams],
     queryFn: () => fileService.getFiles(searchParams),
     placeholderData: (previousData) => previousData,
@@ -38,10 +39,13 @@ export const FileList: React.FC = () => {
 
   // Mutations
   const deleteMutation = useMutation({
-    mutationFn: fileService.deleteFile,
+    mutationFn: (id: string) => fileService.deleteFile(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files'] });
       queryClient.invalidateQueries({ queryKey: ['storage-stats'] });
+    },
+    onError: () => {
+      setError('Failed to delete file');
     },
   });
 
@@ -56,8 +60,13 @@ export const FileList: React.FC = () => {
   });
 
   const downloadMutation = useMutation({
-    mutationFn: ({ fileUrl, filename }: { fileUrl: string; filename: string }) =>
-      fileService.downloadFile(fileUrl, filename),
+    mutationFn: async (file: FileReference) => {
+      try {
+        await fileService.downloadFile(file.file_url, file.original_filename);
+      } catch (err) {
+        setError('Failed to download file');
+      }
+    },
   });
 
   // Event handlers
@@ -132,27 +141,15 @@ export const FileList: React.FC = () => {
     try {
       await bulkDeleteMutation.mutateAsync(Array.from(selectedFiles));
     } catch (err) {
-      console.error('Bulk delete error:', err);
+      setError('Failed to delete selected files');
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this file?')) {
-      return;
-    }
-    
+  const handleDownload = async (file: FileReference) => {
     try {
-      await deleteMutation.mutateAsync(id);
+      await downloadMutation.mutateAsync(file);
     } catch (err) {
-      console.error('Delete error:', err);
-    }
-  };
-
-  const handleDownload = async (fileUrl: string, filename: string) => {
-    try {
-      await downloadMutation.mutateAsync({ fileUrl, filename });
-    } catch (err) {
-      console.error('Download error:', err);
+      setError('Failed to download file');
     }
   };
 
@@ -181,7 +178,7 @@ export const FileList: React.FC = () => {
   const totalPages = fileResponse ? Math.ceil(fileResponse.count / (searchParams.page_size || 20)) : 0;
   const currentPage = searchParams.page || 1;
 
-  if (error) {
+  if (queryError) {
     return (
       <div className="p-6">
         <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded">
@@ -400,7 +397,7 @@ export const FileList: React.FC = () => {
                   {!isSelectMode && (
                     <div className="flex space-x-2">
                       <button
-                        onClick={() => handleDownload(file.file_url, file.original_filename)}
+                        onClick={() => handleDownload(file)}
                         disabled={downloadMutation.isPending}
                         className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
                       >
@@ -408,7 +405,7 @@ export const FileList: React.FC = () => {
                         Download
                       </button>
                       <button
-                        onClick={() => handleDelete(file.id)}
+                        onClick={() => deleteMutation.mutate(file.id)}
                         disabled={deleteMutation.isPending}
                         className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
                       >
