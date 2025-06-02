@@ -18,6 +18,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
   const [error, setError] = useState<string | null>(null);
   const [uploadResult, setUploadResult] = useState<FileUploadResponse | null>(null);
   const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState(false);
 
   const uploadMutation = useMutation({
     mutationFn: fileService.uploadFile,
@@ -35,7 +36,6 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
     },
     onError: (error) => {
       setError('Failed to upload file. Please try again.');
-      console.error('Upload error:', error);
     },
   });
 
@@ -56,9 +56,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
     try {
       setError(null);
       setUploadResult(null);
+      setUploading(true);
       await uploadMutation.mutateAsync(selectedFile);
-    } catch (err) {
-      // Error handling is done in onError callback
+    } catch (error) {
+      setError('Upload failed. Please try again.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -125,7 +128,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
                   type="file"
                   className="sr-only"
                   onChange={handleFileSelect}
-                  disabled={uploadMutation.isPending}
+                  disabled={uploading}
                 />
               </label>
               <p className="pl-1">or drag and drop</p>
@@ -156,14 +159,14 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
 
         <button
           onClick={handleUpload}
-          disabled={!selectedFile || uploadMutation.isPending}
+          disabled={!selectedFile || uploading}
           className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white transition-colors ${
-            !selectedFile || uploadMutation.isPending
+            !selectedFile || uploading
               ? 'bg-gray-300 cursor-not-allowed'
               : 'bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500'
           }`}
         >
-          {uploadMutation.isPending ? (
+          {uploading ? (
             <>
               <svg
                 className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
